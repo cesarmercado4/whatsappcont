@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+data/*.sqlite
+.wwebjs_auth
+.wwebjs_cache
