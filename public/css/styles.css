@@ -1,0 +1,25 @@
+body {
+  background: #f5f7fb;
+}
+
+.metric-card {
+  border-left: 4px solid #0d6efd;
+}
+
+.metric-label {
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.8rem;
+}
+
+.metric-value {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #1f2d3d;
+}
+
+.card canvas {
+  min-height: 280px;
+}
