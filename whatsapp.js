@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const qrcode = require("qrcode-terminal");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 
@@ -13,14 +15,39 @@ function toDateFromMessageTimestamp(timestamp) {
   return new Date(Number(timestamp) * 1000);
 }
 
+const WA_CLIENT_ID = process.env.WA_CLIENT_ID || "conversaciones";
+const WA_AUTH_PATH = path.resolve(process.env.WA_AUTH_PATH || ".wwebjs_auth");
+
+function clearStaleChromiumLocks() {
+  const sessionDir = path.join(WA_AUTH_PATH, `session-${WA_CLIENT_ID}`);
+  const lockFiles = [
+    "SingletonLock",
+    "SingletonCookie",
+    "SingletonSocket",
+    path.join("Default", "LOCK"),
+  ];
+
+  for (const file of lockFiles) {
+    try {
+      fs.rmSync(path.join(sessionDir, file), { force: true });
+    } catch (_) {
+      // Ignore stale lock cleanup errors and continue startup.
+    }
+  }
+}
+
 function createWhatsAppService({ onIncomingMessage }) {
   let client = null;
   let reconnectTimer = null;
   let stopping = false;
 
-  const buildClient = () =>
-    new Client({
-      authStrategy: new LocalAuth({ clientId: "conversaciones" }),
+  const buildClient = () => {
+    clearStaleChromiumLocks();
+    return new Client({
+      authStrategy: new LocalAuth({
+        clientId: WA_CLIENT_ID,
+        dataPath: WA_AUTH_PATH,
+      }),
       puppeteer: {
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         headless: true,
@@ -31,6 +58,7 @@ function createWhatsAppService({ onIncomingMessage }) {
         ],
       },
     });
+  };
 
   const scheduleReconnect = () => {
     if (stopping || reconnectTimer) return;
@@ -112,8 +140,13 @@ function createWhatsAppService({ onIncomingMessage }) {
     stopping = false;
     client = buildClient();
     bindClientEvents(client);
-    await client.initialize();
-    console.log("[WhatsApp] Inicializacion solicitada.");
+    try {
+      await client.initialize();
+      console.log("[WhatsApp] Inicializacion solicitada.");
+    } catch (error) {
+      console.error("[WhatsApp] Fallo al iniciar cliente:", error.message);
+      scheduleReconnect();
+    }
   };
 
   const stop = async () => {
