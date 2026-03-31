@@ -106,12 +106,15 @@ function shouldShowMenu({ state, dateObj }) {
   return (noPreviousOption || optionExpired) && !menuAlreadySentToday;
 }
 
-function isAwaitingOptionToday({ state, dateObj }) {
-  const currentDate = dateOnlyFromDateObj(dateObj);
-  const lastMenuDate = dateOnlyFromDateTime(state?.ultimo_menu_at);
-  const lastOptionDate = dateOnlyFromDateTime(state?.ultima_opcion_at);
+function isAwaitingOption({ state }) {
+  const lastMenuAt = typeof state?.ultimo_menu_at === "string" ? state.ultimo_menu_at : null;
+  const lastOptionAt = typeof state?.ultima_opcion_at === "string" ? state.ultima_opcion_at : null;
 
-  return lastMenuDate === currentDate && lastOptionDate !== currentDate;
+  if (!lastMenuAt) return false;
+  if (!lastOptionAt) return true;
+
+  // Formato YYYY-MM-DD HH:mm:ss: comparacion lexicografica mantiene orden temporal.
+  return lastOptionAt < lastMenuAt;
 }
 
 function buildOptionConfirmation(optionCode) {
@@ -152,7 +155,7 @@ async function bootstrap() {
           return { replyText: MENU_TEXT };
         }
 
-        if (isAwaitingOptionToday({ state, dateObj }) && String(text || "").trim()) {
+        if (isAwaitingOption({ state }) && String(text || "").trim()) {
           await db.recordMenuSent({ telefono, dateObj });
           return { replyText: `${INVALID_OPTION_TEXT}\n\n${MENU_TEXT}` };
         }
