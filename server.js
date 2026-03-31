@@ -23,6 +23,9 @@ const MENU_TEXT = [
   "Responde con el numero de opcion (1, 2, 3 o 4).",
 ].join("\n");
 
+const INVALID_OPTION_TEXT =
+  "⚠️ Por favor selecciona una opcion valida para continuar (1, 2, 3 o 4).";
+
 const OPTION_LABELS = {
   1: "Energia",
   2: "Agua",
@@ -103,6 +106,14 @@ function shouldShowMenu({ state, dateObj }) {
   return (noPreviousOption || optionExpired) && !menuAlreadySentToday;
 }
 
+function isAwaitingOptionToday({ state, dateObj }) {
+  const currentDate = dateOnlyFromDateObj(dateObj);
+  const lastMenuDate = dateOnlyFromDateTime(state?.ultimo_menu_at);
+  const lastOptionDate = dateOnlyFromDateTime(state?.ultima_opcion_at);
+
+  return lastMenuDate === currentDate && lastOptionDate !== currentDate;
+}
+
 function buildOptionConfirmation(optionCode) {
   const label = OPTION_LABELS[optionCode] || "la opcion";
   return `✅ Gracias, seleccionaste ${label}. En breve un responsable se comunicara con vos.`;
@@ -118,6 +129,7 @@ async function bootstrap() {
         await db.saveIncomingMessage({ telefono, dateObj });
         await db.touchContact({ telefono, dateObj });
 
+        const state = await db.getContactState(telefono);
         const optionCode = parseOptionCode(text);
         if (optionCode) {
           const optionName = OPTION_LABELS[optionCode];
@@ -135,10 +147,14 @@ async function bootstrap() {
           return { replyText: MENU_TEXT };
         }
 
-        const state = await db.getContactState(telefono);
         if (shouldShowMenu({ state, dateObj })) {
           await db.recordMenuSent({ telefono, dateObj });
           return { replyText: MENU_TEXT };
+        }
+
+        if (isAwaitingOptionToday({ state, dateObj }) && String(text || "").trim()) {
+          await db.recordMenuSent({ telefono, dateObj });
+          return { replyText: `${INVALID_OPTION_TEXT}\n\n${MENU_TEXT}` };
         }
 
         return { replyText: null };
