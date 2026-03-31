@@ -55,10 +55,9 @@ app.use((err, req, res, next) => {
 });
 
 function parseOptionCode(text) {
-  const cleaned = String(text || "").trim().toLowerCase();
-  const match = cleaned.match(/[1-4]/);
-  if (!match) return null;
-  return Number(match[0]);
+  const cleaned = String(text || "").trim();
+  if (!/^[1-4]$/.test(cleaned)) return null;
+  return Number(cleaned);
 }
 
 function isMenuKeyword(text) {
