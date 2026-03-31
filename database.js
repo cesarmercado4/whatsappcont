@@ -92,9 +92,22 @@ async function initDatabase() {
       ultimo_menu_at TEXT,
       ultima_opcion_codigo INTEGER,
       ultima_opcion_nombre TEXT,
-      ultima_opcion_at TEXT
+      ultima_opcion_at TEXT,
+      estado_conversacion TEXT
     )
   `);
+
+  const estadoColumnExists = await get(
+    `
+      SELECT 1 AS ok
+      FROM pragma_table_info('contacto_estado')
+      WHERE name = 'estado_conversacion'
+      LIMIT 1
+    `
+  );
+  if (!estadoColumnExists) {
+    await run("ALTER TABLE contacto_estado ADD COLUMN estado_conversacion TEXT");
+  }
 
   await run("CREATE INDEX IF NOT EXISTS idx_mensajes_fecha ON mensajes(fecha)");
   await run("CREATE INDEX IF NOT EXISTS idx_mensajes_telefono ON mensajes(telefono)");
@@ -146,7 +159,8 @@ async function getContactState(telefono) {
         ultimo_menu_at,
         ultima_opcion_codigo,
         ultima_opcion_nombre,
-        ultima_opcion_at
+        ultima_opcion_at,
+        estado_conversacion
       FROM contacto_estado
       WHERE telefono = ?
     `,
@@ -159,12 +173,18 @@ async function recordMenuSent({ telefono, dateObj }) {
   const { fecha_hora } = formatDateParts(dateObj);
   await run(
     `
-      INSERT INTO contacto_estado (telefono, ultima_interaccion_at, ultimo_menu_at)
-      VALUES (?, ?, ?)
+      INSERT INTO contacto_estado (
+        telefono,
+        ultima_interaccion_at,
+        ultimo_menu_at,
+        estado_conversacion
+      )
+      VALUES (?, ?, ?, 'esperando_opcion')
       ON CONFLICT(telefono) DO UPDATE
       SET
         ultima_interaccion_at = excluded.ultima_interaccion_at,
-        ultimo_menu_at = excluded.ultimo_menu_at
+        ultimo_menu_at = excluded.ultimo_menu_at,
+        estado_conversacion = 'esperando_opcion'
     `,
     [telefono, fecha_hora, fecha_hora]
   );
@@ -209,15 +229,17 @@ async function recordOptionSelection({
         ultima_interaccion_at,
         ultima_opcion_codigo,
         ultima_opcion_nombre,
-        ultima_opcion_at
+        ultima_opcion_at,
+        estado_conversacion
       )
-      VALUES (?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, 'derivado_a_humano')
       ON CONFLICT(telefono) DO UPDATE
       SET
         ultima_interaccion_at = excluded.ultima_interaccion_at,
         ultima_opcion_codigo = excluded.ultima_opcion_codigo,
         ultima_opcion_nombre = excluded.ultima_opcion_nombre,
-        ultima_opcion_at = excluded.ultima_opcion_at
+        ultima_opcion_at = excluded.ultima_opcion_at,
+        estado_conversacion = 'derivado_a_humano'
     `,
     [
       telefono,

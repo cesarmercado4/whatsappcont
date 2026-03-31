@@ -63,60 +63,6 @@ function parseOptionCode(text) {
   return Number(cleaned);
 }
 
-function isMenuKeyword(text) {
-  const cleaned = String(text || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim();
-  return cleaned === "hola" || cleaned === "menu" || cleaned === "opciones";
-}
-
-function dateOnlyFromDateTime(value) {
-  if (!value || typeof value !== "string") return null;
-  return value.slice(0, 10);
-}
-
-function dateOnlyFromDateObj(dateObj) {
-  const y = dateObj.getFullYear();
-  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
-  const d = String(dateObj.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-function diffDays(olderIsoDate, newerIsoDate) {
-  if (!olderIsoDate || !newerIsoDate) return Infinity;
-  const [y1, m1, d1] = olderIsoDate.split("-").map(Number);
-  const [y2, m2, d2] = newerIsoDate.split("-").map(Number);
-  const ms1 = Date.UTC(y1, m1 - 1, d1);
-  const ms2 = Date.UTC(y2, m2 - 1, d2);
-  return Math.floor((ms2 - ms1) / 86400000);
-}
-
-function shouldShowMenu({ state, dateObj }) {
-  const currentDate = dateOnlyFromDateObj(dateObj);
-  const lastOptionDate = dateOnlyFromDateTime(state?.ultima_opcion_at);
-  const lastMenuDate = dateOnlyFromDateTime(state?.ultimo_menu_at);
-
-  const noPreviousOption = !lastOptionDate;
-  const daysSinceLastOption = diffDays(lastOptionDate, currentDate);
-  const optionExpired = daysSinceLastOption >= 3;
-  const menuAlreadySentToday = lastMenuDate === currentDate;
-
-  return (noPreviousOption || optionExpired) && !menuAlreadySentToday;
-}
-
-function isAwaitingOption({ state }) {
-  const lastMenuAt = typeof state?.ultimo_menu_at === "string" ? state.ultimo_menu_at : null;
-  const lastOptionAt = typeof state?.ultima_opcion_at === "string" ? state.ultima_opcion_at : null;
-
-  if (!lastMenuAt) return false;
-  if (!lastOptionAt) return true;
-
-  // Formato YYYY-MM-DD HH:mm:ss: comparacion lexicografica mantiene orden temporal.
-  return lastOptionAt < lastMenuAt;
-}
-
 function buildOptionConfirmation(optionCode) {
   const label = OPTION_LABELS[optionCode] || "la opcion";
   return `✅ Gracias, seleccionaste ${label}. En breve un responsable se comunicara con vos.`;
@@ -133,34 +79,32 @@ async function bootstrap() {
         await db.touchContact({ telefono, dateObj });
 
         const state = await db.getContactState(telefono);
+        const estado = state?.estado_conversacion || null;
         const optionCode = parseOptionCode(text);
-        if (optionCode) {
-          const optionName = OPTION_LABELS[optionCode];
-          await db.recordOptionSelection({
-            telefono,
-            dateObj,
-            opcionCodigo: optionCode,
-            opcionNombre: optionName,
-          });
-          return { replyText: buildOptionConfirmation(optionCode) };
+
+        if (estado === "derivado_a_humano") {
+          return { replyText: null };
         }
 
-        if (isMenuKeyword(text)) {
-          await db.recordMenuSent({ telefono, dateObj });
-          return { replyText: MENU_TEXT };
-        }
+        if (estado === "esperando_opcion") {
+          if (optionCode) {
+            const optionName = OPTION_LABELS[optionCode];
+            await db.recordOptionSelection({
+              telefono,
+              dateObj,
+              opcionCodigo: optionCode,
+              opcionNombre: optionName,
+            });
+            return { replyText: buildOptionConfirmation(optionCode) };
+          }
 
-        if (shouldShowMenu({ state, dateObj })) {
-          await db.recordMenuSent({ telefono, dateObj });
-          return { replyText: MENU_TEXT };
-        }
-
-        if (isAwaitingOption({ state }) && String(text || "").trim()) {
           await db.recordMenuSent({ telefono, dateObj });
           return { replyText: `${INVALID_OPTION_TEXT}\n\n${MENU_TEXT}` };
         }
 
-        return { replyText: null };
+        // Primer contacto (o estado no definido): enviar menu y pasar a esperando_opcion.
+        await db.recordMenuSent({ telefono, dateObj });
+        return { replyText: MENU_TEXT };
       },
     });
 
