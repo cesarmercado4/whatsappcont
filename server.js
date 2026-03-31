@@ -55,9 +55,19 @@ app.use((err, req, res, next) => {
 });
 
 function parseOptionCode(text) {
-  const cleaned = String(text || "").trim();
-  if (!/^[1-4]$/.test(cleaned)) return null;
-  return Number(cleaned);
+  const cleaned = String(text || "").trim().toLowerCase();
+  const match = cleaned.match(/[1-4]/);
+  if (!match) return null;
+  return Number(match[0]);
+}
+
+function isMenuKeyword(text) {
+  const cleaned = String(text || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+  return cleaned === "hola" || cleaned === "menu" || cleaned === "opciones";
 }
 
 function dateOnlyFromDateTime(value) {
@@ -121,6 +131,11 @@ async function bootstrap() {
           return { replyText: buildOptionConfirmation(optionCode) };
         }
 
+        if (isMenuKeyword(text)) {
+          await db.recordMenuSent({ telefono, dateObj });
+          return { replyText: MENU_TEXT };
+        }
+
         const state = await db.getContactState(telefono);
         if (shouldShowMenu({ state, dateObj })) {
           await db.recordMenuSent({ telefono, dateObj });
@@ -135,8 +150,8 @@ async function bootstrap() {
       console.error("[WhatsApp] Error al iniciar servicio:", error.message);
     });
 
-    app.listen(PORT, () => {
-      console.log(`[Server] Dashboard disponible en http://localhost:${PORT}`);
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Server] Dashboard disponible en http://0.0.0.0:${PORT}`);
     });
 
     const shutdown = async () => {
