@@ -24,7 +24,7 @@ const MENU_TEXT = [
 ].join("\n");
 
 const INVALID_OPTION_TEXT =
-  "⚠️ Por favor selecciona una opcion valida para continuar (1, 2, 3 o 4).";
+  "⚠️ Por favor: ingrese un numero del menu para continuar.";
 
 const OPTION_LABELS = {
   1: "Energia",
