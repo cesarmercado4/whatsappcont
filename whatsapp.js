@@ -110,25 +110,28 @@ function createWhatsAppService({ onIncomingMessage }) {
     waClient.on("message", async (message) => {
       try {
         if (message.fromMe) return;
-        if (!message.from) return;
-        if (message.from === "status@broadcast") return;
-        if (!message.from.endsWith("@c.us")) return;
+        const chatId = String(message.from || message.author || "");
+        if (!chatId) return;
+        if (chatId === "status@broadcast") return;
+        if (chatId.endsWith("@g.us")) return;
 
-        const telefono = normalizePhone(message.from);
+        const telefono = normalizePhone(chatId);
         if (!telefono) return;
 
         const dateObj = toDateFromMessageTimestamp(message.timestamp);
         const text = String(message.body || "").trim();
+        console.log(`[WhatsApp] Mensaje entrante de ${telefono}: "${text}"`);
 
         const result = await onIncomingMessage({
           telefono,
           dateObj,
           text,
-          chatId: message.from,
+          chatId,
         });
 
         if (result?.replyText) {
-          await waClient.sendMessage(message.from, result.replyText);
+          await waClient.sendMessage(chatId, result.replyText);
+          console.log(`[WhatsApp] Respuesta enviada a ${telefono}.`);
         }
       } catch (error) {
         console.error("[WhatsApp] Error procesando mensaje:", error.message);
