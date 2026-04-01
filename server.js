@@ -33,6 +33,8 @@ const OPTION_LABELS = {
   4: "Consulta Administrativa",
 };
 
+const contactLocks = new Map();
+
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 
@@ -68,43 +70,139 @@ function buildOptionConfirmation(optionCode) {
   return `✅ Gracias, seleccionaste ${label}. En breve un responsable se comunicara con vos.`;
 }
 
+function normalizeStateForFlow(state) {
+  const estado = state?.estado_conversacion || "sin_estado";
+  const botActivo = state?.bot_activo === 0 ? false : true;
+  return { estado, botActivo };
+}
+
+function formatStateLabel(estado, botActivo) {
+  return `${estado}|bot_activo=${botActivo ? "true" : "false"}`;
+}
+
+function logBotFlow({
+  telefono,
+  messageId,
+  tipoEvento,
+  estadoAntes,
+  accionTomada,
+  estadoDespues,
+}) {
+  console.log(
+    `[BotFlow] telefono=${telefono} message_id=${messageId} tipo_evento=${tipoEvento} ` +
+      `estado_antes=${estadoAntes} accion_tomada=${accionTomada} estado_despues=${estadoDespues}`
+  );
+}
+
+async function withContactLock(telefono, handler) {
+  while (contactLocks.has(telefono)) {
+    await contactLocks.get(telefono);
+  }
+
+  let release;
+  const lockPromise = new Promise((resolve) => {
+    release = resolve;
+  });
+  contactLocks.set(telefono, lockPromise);
+
+  try {
+    return await handler();
+  } finally {
+    contactLocks.delete(telefono);
+    release();
+  }
+}
+
 async function bootstrap() {
   try {
     await db.initDatabase();
     console.log("[DB] SQLite inicializada.");
 
     const waService = createWhatsAppService({
-      onIncomingMessage: async ({ telefono, dateObj, text }) => {
-        await db.saveIncomingMessage({ telefono, dateObj });
-        await db.touchContact({ telefono, dateObj });
-
-        const state = await db.getContactState(telefono);
-        const estado = state?.estado_conversacion || null;
-        const optionCode = parseOptionCode(text);
-
-        if (estado === "derivado_a_humano") {
-          return { replyText: null };
-        }
-
-        if (estado === "esperando_opcion") {
-          if (optionCode) {
-            const optionName = OPTION_LABELS[optionCode];
-            await db.recordOptionSelection({
+      onIncomingMessage: async ({
+        messageId,
+        tipoEvento = "incoming_message",
+        telefono,
+        dateObj,
+        text,
+      }) => {
+        return withContactLock(telefono, async () => {
+          const inserted = await db.saveIncomingMessage({ messageId, telefono, dateObj });
+          if (!inserted) {
+            const duplicatedState = normalizeStateForFlow(await db.getContactState(telefono));
+            logBotFlow({
               telefono,
-              dateObj,
-              opcionCodigo: optionCode,
-              opcionNombre: optionName,
+              messageId,
+              tipoEvento,
+              estadoAntes: formatStateLabel(duplicatedState.estado, duplicatedState.botActivo),
+              accionTomada: "ignorar_duplicado_message_id",
+              estadoDespues: formatStateLabel(duplicatedState.estado, duplicatedState.botActivo),
             });
-            return { replyText: buildOptionConfirmation(optionCode) };
+            return { replyText: null };
           }
 
-          await db.recordMenuSent({ telefono, dateObj });
-          return { replyText: `${INVALID_OPTION_TEXT}\n\n${MENU_TEXT}` };
-        }
+          const stateBefore = normalizeStateForFlow(await db.getContactState(telefono));
+          const estadoAntesLabel = formatStateLabel(stateBefore.estado, stateBefore.botActivo);
 
-        // Primer contacto (o estado no definido): enviar menu y pasar a esperando_opcion.
-        await db.recordMenuSent({ telefono, dateObj });
-        return { replyText: MENU_TEXT };
+          // Una vez derivado a humano o bot inactivo, el bot no interviene mas.
+          if (stateBefore.estado === "derivado_a_humano" || !stateBefore.botActivo) {
+            await db.touchContact({ telefono, dateObj });
+            logBotFlow({
+              telefono,
+              messageId,
+              tipoEvento,
+              estadoAntes: estadoAntesLabel,
+              accionTomada: "ignorar_bot_inactivo",
+              estadoDespues: estadoAntesLabel,
+            });
+            return { replyText: null };
+          }
+
+          if (stateBefore.estado === "esperando_opcion") {
+            const optionCode = parseOptionCode(text);
+            if (optionCode) {
+              const optionName = OPTION_LABELS[optionCode];
+              await db.recordOptionSelection({
+                telefono,
+                dateObj,
+                opcionCodigo: optionCode,
+                opcionNombre: optionName,
+              });
+              logBotFlow({
+                telefono,
+                messageId,
+                tipoEvento,
+                estadoAntes: estadoAntesLabel,
+                accionTomada: `confirmar_opcion_${optionCode}`,
+                estadoDespues: "derivado_a_humano|bot_activo=false",
+              });
+              return { replyText: buildOptionConfirmation(optionCode) };
+            }
+
+            await db.recordMenuSent({ telefono, dateObj });
+            logBotFlow({
+              telefono,
+              messageId,
+              tipoEvento,
+              estadoAntes: estadoAntesLabel,
+              accionTomada: "opcion_invalida_reenviar_menu",
+              estadoDespues: "esperando_opcion|bot_activo=true",
+            });
+            return { replyText: `${INVALID_OPTION_TEXT}\n\n${MENU_TEXT}` };
+          }
+
+          // Primer contacto (sin estado): enviar menu inicial y quedar esperando opcion.
+          await db.recordMenuSent({ telefono, dateObj });
+          logBotFlow({
+            telefono,
+            messageId,
+            tipoEvento,
+            estadoAntes: estadoAntesLabel,
+            accionTomada: "enviar_menu_inicial",
+            estadoDespues: "esperando_opcion|bot_activo=true",
+          });
+          return { replyText: MENU_TEXT };
+        });
       },
     });
 

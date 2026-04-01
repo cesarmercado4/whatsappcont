@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const qrcode = require("qrcode-terminal");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 
@@ -13,6 +14,20 @@ function normalizePhone(rawId) {
 function toDateFromMessageTimestamp(timestamp) {
   if (!timestamp) return new Date();
   return new Date(Number(timestamp) * 1000);
+}
+
+function getMessageId(message, chatId) {
+  const serialized = message?.id?._serialized;
+  if (serialized && typeof serialized === "string") return serialized;
+
+  const fallbackSource = [
+    chatId || "",
+    String(message?.timestamp || ""),
+    String(message?.body || ""),
+    String(message?.type || ""),
+  ].join("|");
+
+  return `fallback_${crypto.createHash("sha1").update(fallbackSource).digest("hex")}`;
 }
 
 const WA_CLIENT_ID = process.env.WA_CLIENT_ID || "conversaciones";
@@ -80,6 +95,11 @@ function createWhatsAppService({ onIncomingMessage }) {
   };
 
   const bindClientEvents = (waClient) => {
+    if (waClient.listenerCount("message") > 0) {
+      console.warn("[WhatsApp] Se detectaron listeners previos de 'message'. Limpiando duplicados.");
+      waClient.removeAllListeners("message");
+    }
+
     waClient.on("qr", (qr) => {
       console.log("[WhatsApp] Escanea este QR para iniciar sesion:");
       qrcode.generate(qr, { small: true });
@@ -114,15 +134,19 @@ function createWhatsAppService({ onIncomingMessage }) {
         if (!chatId) return;
         if (chatId === "status@broadcast") return;
         if (chatId.endsWith("@g.us")) return;
+        if (String(message.type || "").toLowerCase() === "notification_template") return;
 
         const telefono = normalizePhone(chatId);
         if (!telefono) return;
 
         const dateObj = toDateFromMessageTimestamp(message.timestamp);
         const text = String(message.body || "").trim();
-        console.log(`[WhatsApp] Mensaje entrante de ${telefono}: "${text}"`);
+        const messageId = getMessageId(message, chatId);
+        console.log(`[WhatsApp] Mensaje entrante de ${telefono} [${messageId}]: "${text}"`);
 
         const result = await onIncomingMessage({
+          messageId,
+          tipoEvento: "incoming_message",
           telefono,
           dateObj,
           text,
@@ -131,7 +155,7 @@ function createWhatsAppService({ onIncomingMessage }) {
 
         if (result?.replyText) {
           await waClient.sendMessage(chatId, result.replyText);
-          console.log(`[WhatsApp] Respuesta enviada a ${telefono}.`);
+          console.log(`[WhatsApp] Respuesta enviada a ${telefono} [${messageId}].`);
         }
       } catch (error) {
         console.error("[WhatsApp] Error procesando mensaje:", error.message);

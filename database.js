@@ -61,6 +61,7 @@ async function initDatabase() {
   await run(`
     CREATE TABLE IF NOT EXISTS mensajes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT,
       telefono TEXT NOT NULL,
       fecha_hora TEXT NOT NULL,
       fecha TEXT NOT NULL,
@@ -93,9 +94,22 @@ async function initDatabase() {
       ultima_opcion_codigo INTEGER,
       ultima_opcion_nombre TEXT,
       ultima_opcion_at TEXT,
-      estado_conversacion TEXT
+      estado_conversacion TEXT,
+      bot_activo INTEGER
     )
   `);
+
+  const messageIdColumnExists = await get(
+    `
+      SELECT 1 AS ok
+      FROM pragma_table_info('mensajes')
+      WHERE name = 'message_id'
+      LIMIT 1
+    `
+  );
+  if (!messageIdColumnExists) {
+    await run("ALTER TABLE mensajes ADD COLUMN message_id TEXT");
+  }
 
   const estadoColumnExists = await get(
     `
@@ -109,24 +123,59 @@ async function initDatabase() {
     await run("ALTER TABLE contacto_estado ADD COLUMN estado_conversacion TEXT");
   }
 
+  const botActivoColumnExists = await get(
+    `
+      SELECT 1 AS ok
+      FROM pragma_table_info('contacto_estado')
+      WHERE name = 'bot_activo'
+      LIMIT 1
+    `
+  );
+  if (!botActivoColumnExists) {
+    await run("ALTER TABLE contacto_estado ADD COLUMN bot_activo INTEGER");
+  }
+
+  await run(`
+    UPDATE contacto_estado
+    SET bot_activo = CASE
+      WHEN estado_conversacion = 'derivado_a_humano' THEN 0
+      ELSE 1
+    END
+    WHERE bot_activo IS NULL
+  `);
+
   await run("CREATE INDEX IF NOT EXISTS idx_mensajes_fecha ON mensajes(fecha)");
   await run("CREATE INDEX IF NOT EXISTS idx_mensajes_telefono ON mensajes(telefono)");
   await run("CREATE INDEX IF NOT EXISTS idx_mensajes_anio_mes ON mensajes(anio, mes)");
   await run("CREATE INDEX IF NOT EXISTS idx_mensajes_telefono_fecha ON mensajes(telefono, fecha)");
+  await run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mensajes_message_id_unique
+    ON mensajes(message_id)
+    WHERE message_id IS NOT NULL
+  `);
 
   await run("CREATE INDEX IF NOT EXISTS idx_conv_opt_fecha ON conversacion_opciones(fecha)");
   await run("CREATE INDEX IF NOT EXISTS idx_conv_opt_anio_mes ON conversacion_opciones(anio, mes)");
   await run("CREATE INDEX IF NOT EXISTS idx_conv_opt_codigo ON conversacion_opciones(opcion_codigo)");
 }
 
-async function saveIncomingMessage({ telefono, dateObj }) {
+async function saveIncomingMessage({ messageId, telefono, dateObj }) {
   const values = formatDateParts(dateObj);
-  await run(
+  const result = await run(
     `
-      INSERT INTO mensajes (telefono, fecha_hora, fecha, anio, mes, dia)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO mensajes (
+        message_id,
+        telefono,
+        fecha_hora,
+        fecha,
+        anio,
+        mes,
+        dia
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `,
     [
+      messageId || null,
       telefono,
       values.fecha_hora,
       values.fecha,
@@ -135,14 +184,15 @@ async function saveIncomingMessage({ telefono, dateObj }) {
       values.dia,
     ]
   );
+  return result.changes > 0;
 }
 
 async function touchContact({ telefono, dateObj }) {
   const { fecha_hora } = formatDateParts(dateObj);
   await run(
     `
-      INSERT INTO contacto_estado (telefono, ultima_interaccion_at)
-      VALUES (?, ?)
+      INSERT INTO contacto_estado (telefono, ultima_interaccion_at, bot_activo)
+      VALUES (?, ?, 1)
       ON CONFLICT(telefono) DO UPDATE
       SET ultima_interaccion_at = excluded.ultima_interaccion_at
     `,
@@ -160,7 +210,8 @@ async function getContactState(telefono) {
         ultima_opcion_codigo,
         ultima_opcion_nombre,
         ultima_opcion_at,
-        estado_conversacion
+        estado_conversacion,
+        bot_activo
       FROM contacto_estado
       WHERE telefono = ?
     `,
@@ -177,14 +228,16 @@ async function recordMenuSent({ telefono, dateObj }) {
         telefono,
         ultima_interaccion_at,
         ultimo_menu_at,
-        estado_conversacion
+        estado_conversacion,
+        bot_activo
       )
-      VALUES (?, ?, ?, 'esperando_opcion')
+      VALUES (?, ?, ?, 'esperando_opcion', 1)
       ON CONFLICT(telefono) DO UPDATE
       SET
         ultima_interaccion_at = excluded.ultima_interaccion_at,
         ultimo_menu_at = excluded.ultimo_menu_at,
-        estado_conversacion = 'esperando_opcion'
+        estado_conversacion = 'esperando_opcion',
+        bot_activo = 1
     `,
     [telefono, fecha_hora, fecha_hora]
   );
@@ -230,16 +283,18 @@ async function recordOptionSelection({
         ultima_opcion_codigo,
         ultima_opcion_nombre,
         ultima_opcion_at,
-        estado_conversacion
+        estado_conversacion,
+        bot_activo
       )
-      VALUES (?, ?, ?, ?, ?, 'derivado_a_humano')
+      VALUES (?, ?, ?, ?, ?, 'derivado_a_humano', 0)
       ON CONFLICT(telefono) DO UPDATE
       SET
         ultima_interaccion_at = excluded.ultima_interaccion_at,
         ultima_opcion_codigo = excluded.ultima_opcion_codigo,
         ultima_opcion_nombre = excluded.ultima_opcion_nombre,
         ultima_opcion_at = excluded.ultima_opcion_at,
-        estado_conversacion = 'derivado_a_humano'
+        estado_conversacion = 'derivado_a_humano',
+        bot_activo = 0
     `,
     [
       telefono,
