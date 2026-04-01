@@ -32,6 +32,38 @@ function getMessageId(message, chatId) {
 
 const WA_CLIENT_ID = process.env.WA_CLIENT_ID || "conversaciones";
 const WA_AUTH_PATH = path.resolve(process.env.WA_AUTH_PATH || ".wwebjs_auth");
+const BOT_START_TIME = "2026-04-01 10:30:00";
+
+function parseBotStartTimeToMs(value) {
+  const match = String(value).match(
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/
+  );
+  if (!match) {
+    throw new Error(`[WhatsApp] BOT_START_TIME invalido: ${value}`);
+  }
+  const [, yy, mm, dd, hh, mi, ss] = match;
+  const date = new Date(
+    Number(yy),
+    Number(mm) - 1,
+    Number(dd),
+    Number(hh),
+    Number(mi),
+    Number(ss)
+  );
+  return date.getTime();
+}
+
+function formatDateTime(dateObj) {
+  const y = String(dateObj.getFullYear());
+  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const d = String(dateObj.getDate()).padStart(2, "0");
+  const hh = String(dateObj.getHours()).padStart(2, "0");
+  const mi = String(dateObj.getMinutes()).padStart(2, "0");
+  const ss = String(dateObj.getSeconds()).padStart(2, "0");
+  return `${y}-${m}-${d} ${hh}:${mi}:${ss}`;
+}
+
+const BOT_START_TIME_MS = parseBotStartTimeToMs(BOT_START_TIME);
 
 function clearStaleChromiumLocks() {
   const sessionDir = path.join(WA_AUTH_PATH, `session-${WA_CLIENT_ID}`);
@@ -140,8 +172,24 @@ function createWhatsAppService({ onIncomingMessage }) {
         if (!telefono) return;
 
         const dateObj = toDateFromMessageTimestamp(message.timestamp);
-        const text = String(message.body || "").trim();
         const messageId = getMessageId(message, chatId);
+        const msgTimestampMs = dateObj.getTime();
+        const msgTimestampLabel = formatDateTime(dateObj);
+
+        if (msgTimestampMs < BOT_START_TIME_MS) {
+          console.log(
+            `[INFO] msg_id=${messageId} telefono=${telefono} timestamp=${msgTimestampLabel} ` +
+              `BOT_START_TIME=${BOT_START_TIME} -> IGNORADO (antes del BOT_START_TIME)`
+          );
+          return;
+        }
+
+        console.log(
+          `[INFO] msg_id=${messageId} telefono=${telefono} timestamp=${msgTimestampLabel} ` +
+            `BOT_START_TIME=${BOT_START_TIME} -> PROCESADO`
+        );
+
+        const text = String(message.body || "").trim();
         console.log(`[WhatsApp] Mensaje entrante de ${telefono} [${messageId}]: "${text}"`);
 
         const result = await onIncomingMessage({
